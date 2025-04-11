@@ -3,9 +3,9 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { exec } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 const cloudinary = require('cloudinary').v2;
+const { GoogleAuth } = require('google-auth-library');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,19 +19,23 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Google Cloud & model config
+// Google Cloud & model config from .env
 const project = process.env.GCLOUD_PROJECT;
 const location = process.env.GCLOUD_LOCATION;
 const model = process.env.GCLOUD_MODEL;
 const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:predictLongRunning`;
 
-// Get Google Cloud Access Token
-const accessToken = () => new Promise((resolve, reject) => {
-  exec('gcloud auth print-access-token', (err, stdout) => {
-    if (err) reject(err);
-    else resolve(stdout.trim());
+// Get Google Cloud Access Token using service account JSON
+const accessToken = async () => {
+  const auth = new GoogleAuth({
+    keyFile: path.join(__dirname, 'service-account.json'), // Make sure this is uploaded in Render too!
+    scopes: 'https://www.googleapis.com/auth/cloud-platform',
   });
-});
+
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  return tokenResponse.token;
+};
 
 // Sleep utility
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -133,7 +137,7 @@ async function uploadToCloudinary(filePath) {
 
 // Main route
 app.post('/generate', async (req, res) => {
-  const { prompt, aspectRatio, durationSeconds } = req.body;
+  const { prompt, durationSeconds, aspectRatio } = req.body;
   if (!prompt) return res.status(400).json({ error: "Missing 'prompt' in request body." });
 
   const id = uuidv4();
@@ -151,7 +155,7 @@ app.post('/generate', async (req, res) => {
     fs.writeFileSync(videoPath, buffer);
 
     const cloudinaryUrl = await uploadToCloudinary(videoPath);
-    fs.unlinkSync(videoPath); // cleanup
+    fs.unlinkSync(videoPath); // optional cleanup
 
     return res.json({ videoUrl: cloudinaryUrl });
   } catch (err) {
